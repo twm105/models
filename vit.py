@@ -303,6 +303,14 @@ class ViT(nn.Module):
         else:
             raise ValueError(f"[Error] Unrecognised embedding type '{embed_type}'. Embedding type must be one of 'default' or 'hybrid'.")
         
+        # create class token (expand batch size during forward pass)
+        self.class_token = nn.Parameter(data=torch.randn(1, 1, embed_dim),
+                                        requires_grad=True)
+
+        # create position embeddings (expand batch size and sequence length (num_patches + class token) during forward pass)
+        self.position_embeddings = nn.Parameter(data=torch.randn(1, 1, embed_dim),
+                                                requires_grad=True)
+        
         # define num_layers of the ViT encoder block
         self.encoder_blocks = nn.Sequential(
             *[ViTEncoderBlock(num_msa_heads=num_msa_heads,
@@ -313,6 +321,7 @@ class ViT(nn.Module):
         
         # define the classifier
         self.classifier = nn.Sequential(
+            nn.LayerNorm(normalized_shape=embed_dim),
             nn.Linear(in_features=embed_dim,
                       out_features=num_classes,),
             nn.Dropout(p=dropout),
@@ -321,6 +330,15 @@ class ViT(nn.Module):
     def forward(self, x) -> torch.Tensor:
         # apply patch embeddings
         x = self.patch_embeddings(x)
+
+        # expand class token along batch dimension
+        class_token = self.class_token.expand(x.shape[0], -1, -1)
+
+        # concatenate class token and patch embeddings on sequence dimension
+        x = torch.cat([class_token, x], dim=1)
+
+        # add expanded position embeddings (both batch size and sequence length) to class and patch embeddings
+        x = x + self.position_embeddings.expand(x.shape[0], x.shape[1], -1)
 
         # apply num_layers ViT encoder blocks
         x = self.encoder_blocks(x)
@@ -411,4 +429,5 @@ if __name__ == '__main__':
               num_layers=num_layers,
               num_classes=num_classes,)
     logits = vit(img)
+    print(50 * '-')
     print(f"ViT logits shape: {logits.shape}")
