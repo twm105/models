@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+from typing import Tuple
 
 
 # default config
@@ -286,6 +287,7 @@ class ViT(nn.Module):
     """
 
     def __init__(self,
+                 img_shape:Tuple[int, int],
                  in_channels:int=IN_CHANNELS,
                  patch_size:int=PATCH_SIZE,
                  embed_type:str=EMBED_TYPE,
@@ -297,7 +299,13 @@ class ViT(nn.Module):
                  num_classes:int=NUM_CLASSES) -> nn.Module:
         super().__init__()
 
+        # check inputs
+        assert len(img_shape) == 2, f"2d image shape expected, {len(img_shape)}d provided."
+        input_tensor_validation(input_tensor=torch.Tensor(1, in_channels, *img_shape),
+                                patch_size=patch_size)
+
         # set attributes
+        self.N = img_shape[0] * img_shape[1] // patch_size**2
         self.embed_dim = embed_dim
         self.num_layers = num_layers
 
@@ -318,7 +326,7 @@ class ViT(nn.Module):
                                         requires_grad=True)
 
         # create position embeddings (expand batch size and sequence length (num_patches + class token) during forward pass)
-        self.position_embeddings = nn.Parameter(data=torch.randn(1, 1, embed_dim),
+        self.position_embeddings = nn.Parameter(data=torch.randn(1, self.N + 1, embed_dim),
                                                 requires_grad=True)
         
         # define num_layers of the ViT encoder block
@@ -348,7 +356,7 @@ class ViT(nn.Module):
         x = torch.cat([class_token, x], dim=1)
 
         # add expanded position embeddings (both batch size and sequence length) to class and patch embeddings
-        x = x + self.position_embeddings.expand(x.shape[0], x.shape[1], -1)
+        x = x + self.position_embeddings.expand(x.shape[0], -1, -1)
 
         # apply num_layers ViT encoder blocks
         x = self.encoder_blocks(x)
@@ -429,7 +437,8 @@ if __name__ == '__main__':
     print(f"ViT encoder block output shape: {vit_encoder_block_out.shape}")
 
     # apply full ViT to input image
-    vit = ViT(in_channels=in_channels,
+    vit = ViT(img_shape=(img_size, img_size),
+              in_channels=in_channels,
               patch_size=patch_size,
               embed_type=embed_type,
               embed_dim=embed_dim,
