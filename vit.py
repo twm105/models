@@ -276,6 +276,7 @@ class ViT(nn.Module):
         Y: logits for classifier
     
     ARGS
+        img_size (Tuple): 2d size of the input images accepted by the ViT in pixels
         in_channels (int): number of channels for input image
         patch_size (int): size of each patch applied to the input image
         embed_dim (int): size of the hidden dimension of the model's embeddings
