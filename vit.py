@@ -10,11 +10,14 @@ IMG_SIZE = 224
 PATCH_SIZE = 16
 EMBED_TYPE = 'default'
 EMBED_DIM = 768
+EMBED_DROPOUT = 0
 NUM_MSA_HEADS = 12
-DROPOUT = 0.1
+ATTN_DROPOUT = 0
 MLP_HIDDEN_DIM = 3072
+MLP_DROPOUT = 0.1
 NUM_LAYERS = 12
 NUM_CLASSES = 1000
+CLASSIFIER_DROPOUT = 0.1
 
 
 def input_tensor_validation(input_tensor:torch.Tensor,
@@ -75,7 +78,8 @@ class PatchEmbedding(nn.Module):
     def __init__(self,
                  in_channels:int=IN_CHANNELS,
                  patch_size:int=PATCH_SIZE,
-                 embed_dim:int=EMBED_DIM) -> nn.Module:
+                 embed_dim:int=EMBED_DIM,
+                 embed_dropout:float=EMBED_DROPOUT,) -> nn.Module:
         super().__init__()
         
         # set attributes
@@ -84,9 +88,12 @@ class PatchEmbedding(nn.Module):
         self.flattened_patch_dim = in_channels * patch_size**2
 
         # define mapping module
-        self.embedding_map = nn.Linear(in_features=self.flattened_patch_dim,
-                                       out_features=embed_dim,
-                                       bias=False)
+        self.embedding_map = nn.Sequential(
+            nn.Linear(in_features=self.flattened_patch_dim,
+                      out_features=embed_dim,
+                      bias=False),
+            nn.Dropout(p=embed_dropout)
+        )
         
     def forward(self, input) -> torch.Tensor:
         # assertion that input image size is divisible by patch size and that x is 4d tensor
@@ -119,24 +126,29 @@ class PatchEmbeddingCNN(nn.Module):
         in_channels (int): number of channels for input image
         patch_size (int): size of each patch applied to the input image
         embed_dim (int): size of the hidden dimension of the model's embeddings
+        embed_dropout (float): probability of elements being zeroed during training
     """
 
     def __init__(self,
                  in_channels:int=IN_CHANNELS,
                  patch_size:int=PATCH_SIZE,
-                 embed_dim:int=EMBED_DIM) -> nn.Module:
+                 embed_dim:int=EMBED_DIM,
+                 embed_dropout:float=EMBED_DROPOUT,) -> nn.Module:
         super().__init__()
         
         self.patch_size = patch_size
 
-        self.cnn_embed_map = nn.Conv2d(in_channels=in_channels,
-                                       out_channels=embed_dim,
-                                       kernel_size=patch_size,
-                                       stride=patch_size,
-                                       padding=0,
-                                       bias=False,)
-        self.flatten = nn.Flatten(start_dim=2,
-                                  end_dim=-1,)
+        self.cnn_embed_map = nn.Sequential(
+            nn.Conv2d(in_channels=in_channels,
+                      out_channels=embed_dim,
+                      kernel_size=patch_size,
+                      stride=patch_size,
+                      padding=0,
+                      bias=False,),
+            nn.Flatten(start_dim=2,
+                       end_dim=-1,),
+            nn.Dropout(p=embed_dropout,)
+        )
         
     def forward(self, x) -> torch.Tensor:
         # assertion that input image size is divisible by patch size and that x is 4d tensor
@@ -144,7 +156,7 @@ class PatchEmbeddingCNN(nn.Module):
                                 patch_size=self.patch_size)
         
         # apply cnn, flatten and permute dims to correct shape
-        return self.flatten(self.cnn_embed_map(x)).permute(0, 2, 1)
+        return self.cnn_embed_map(x).permute(0, 2, 1)
     
 
 class MSABlock(nn.Module):
@@ -155,20 +167,24 @@ class MSABlock(nn.Module):
         D: hidden embedding dimension
     
     ARGS
-        num_heads (int): number of self-attention heads applied to hidden dimension
         embed_dim (int): hidden dimension size for transformer
+        num_heads (int): number of self-attention heads applied to hidden dimension
+        attn_dropout (float): probability of attn weights being zeroed during training
     """
 
     def __init__(self,
+                 embed_dim:int=EMBED_DIM,
                  num_heads:int=NUM_MSA_HEADS,
-                 embed_dim:int=EMBED_DIM,) -> nn.Module:
+                 attn_dropout:float=ATTN_DROPOUT,) -> nn.Module:
         super().__init__()
 
         self.embed_dim = embed_dim
 
         self.ln = nn.LayerNorm(normalized_shape=embed_dim)
         self.msa = nn.MultiheadAttention(embed_dim=embed_dim,
-                                         num_heads=num_heads,)
+                                         num_heads=num_heads,
+                                         dropout=attn_dropout,
+                                         batch_first=True) # default order is [sequence, batch, feature]
         
     def forward(self, x) -> torch.Tensor:
         # validate shape and size of input tensor
@@ -194,13 +210,13 @@ class MLPBlock(nn.Module):
     ARGS
         embed_dim (int): hidden dimension size for transformer
         hidden_dim (int): dimensionality of the hidden MLP layer
-        dropout (float): probability of an element being zeroed
+        mlp_dropout (float): probability of an element being zeroed
     """
 
     def __init__(self,
                  embed_dim:int=EMBED_DIM,
                  hidden_dim:int=MLP_HIDDEN_DIM,
-                 dropout:float=DROPOUT,) -> nn.Module:
+                 mlp_dropout:float=MLP_DROPOUT,) -> nn.Module:
         super().__init__()
 
         self.embed_dim = embed_dim
@@ -209,11 +225,11 @@ class MLPBlock(nn.Module):
         self.mlp = nn.Sequential(
             nn.Linear(in_features=embed_dim,
                       out_features=hidden_dim,),
-            nn.Dropout(p=dropout),
+            nn.Dropout(p=mlp_dropout),
             nn.GELU(),
             nn.Linear(in_features=hidden_dim,
                       out_features=embed_dim),
-            nn.Dropout(p=dropout),
+            nn.Dropout(p=mlp_dropout),
         )
     
     def forward(self, x) -> torch.Tensor:
@@ -233,26 +249,29 @@ class ViTEncoderBlock(nn.Module):
         D: hidden embedding dimension
     
     ARGS
-        num_msa_heads (int): number of self-attention heads applied to hidden dimension
         embed_dim (int): hidden dimension size for transformer
-        hidden_dim (int): dimensionality of the hidden MLP layer
-        dropout (float): probability of an element being zeroed
+        num_msa_heads (int): number of self-attention heads applied to hidden dimension
+        attn_dropout (float): probability of an element in MSA being zeroed
+        mlp_hidden_dim (int): dimensionality of the hidden MLP layer
+        mlp_dropout (float): probability of an element in MLP being zeroed
         """
 
     def __init__(self,
-                 num_msa_heads:int=NUM_MSA_HEADS,
                  embed_dim:int=EMBED_DIM,
+                 num_msa_heads:int=NUM_MSA_HEADS,
+                 attn_dropout:float=ATTN_DROPOUT,
                  mlp_hidden_dim=MLP_HIDDEN_DIM,
-                 dropout:float=DROPOUT,) -> nn.Module:
+                 mlp_dropout:float=MLP_DROPOUT,) -> nn.Module:
         super().__init__()
 
         self.embed_dim = embed_dim
 
-        self.msa_block = MSABlock(num_heads=num_msa_heads,
-                                  embed_dim=embed_dim,)
+        self.msa_block = MSABlock(embed_dim=embed_dim,
+                                  num_heads=num_msa_heads,
+                                  attn_dropout=attn_dropout,)
         self.mlp_block = MLPBlock(embed_dim=embed_dim,
                                   hidden_dim=mlp_hidden_dim,
-                                  dropout=dropout)
+                                  mlp_dropout=mlp_dropout)
         
     def forward(self, x) -> torch.Tensor:
         # validate shape and size of input tensor
@@ -281,12 +300,16 @@ class ViT(nn.Module):
         img_shape (Tuple): 2d size of the input images accepted by the ViT in pixels
         in_channels (int): number of channels for input image
         patch_size (int): size of each patch applied to the input image
+        embed_type (str): type of patch embeddings used: reshap vs cnn (hybrid)
         embed_dim (int): size of the hidden dimension of the model's embeddings
+        embed_dropout (float): probability of an element being zeroed
         num_msa_heads (int): number of self-attention heads applied to hidden dimension
-        hidden_dim (int): dimensionality of the hidden MLP layer
-        dropout (float): probability of an element being zeroed
+        attn_dropout (float): probability of an element being zeroed
+        mlp_hidden_dim (int): dimensionality of the hidden MLP layer
+        mlp_dropout (float): probability of an element being zeroed
         num_layers (int): the depth of ViT encoder blocks stacked together
         num_classes (int): the number of classes (logits) outputted by the model
+        classifier_dropout (float): probability of an element being zeroed
     """
 
     def __init__(self,
@@ -295,11 +318,14 @@ class ViT(nn.Module):
                  patch_size:int=PATCH_SIZE,
                  embed_type:str=EMBED_TYPE,
                  embed_dim:int=EMBED_DIM,
+                 embed_dropout:float=EMBED_DROPOUT,
                  num_msa_heads:int=NUM_MSA_HEADS,
+                 attn_dropout:float=ATTN_DROPOUT,
                  mlp_hidden_dim:int=MLP_HIDDEN_DIM,
-                 dropout:float=DROPOUT,
+                 mlp_dropout:float=MLP_DROPOUT,
                  num_layers:int=NUM_LAYERS,
-                 num_classes:int=NUM_CLASSES) -> nn.Module:
+                 num_classes:int=NUM_CLASSES,
+                 classifier_dropout:float=CLASSIFIER_DROPOUT) -> nn.Module:
         super().__init__()
 
         # check inputs
@@ -316,36 +342,37 @@ class ViT(nn.Module):
         if embed_type == 'default':
             self.patch_embeddings = PatchEmbedding(in_channels=in_channels,
                                                    patch_size=patch_size,
-                                                   embed_dim=embed_dim,)
+                                                   embed_dim=embed_dim,
+                                                   embed_dropout=embed_dropout,)
         elif embed_type == 'hybrid':
             self.patch_embeddings = PatchEmbeddingCNN(in_channels=in_channels,
                                                       patch_size=patch_size,
-                                                      embed_dim=embed_dim,)
+                                                      embed_dim=embed_dim,
+                                                      embed_dropout=embed_dropout,)
         else:
             raise ValueError(f"[Error] Unrecognised embedding type '{embed_type}'. Embedding type must be one of 'default' or 'hybrid'.")
         
         # create class token (expand batch size during forward pass)
-        self.class_token = nn.Parameter(data=torch.randn(1, 1, embed_dim),
-                                        requires_grad=True)
+        self.class_token = nn.Parameter(data=torch.randn(1, 1, embed_dim))
 
         # create position embeddings (expand batch size and sequence length (num_patches + class token) during forward pass)
-        self.position_embeddings = nn.Parameter(data=torch.randn(1, self.N + 1, embed_dim),
-                                                requires_grad=True)
+        self.position_embeddings = nn.Parameter(data=torch.randn(1, self.N + 1, embed_dim))
         
         # define num_layers of the ViT encoder block
         self.encoder_blocks = nn.Sequential(
-            *[ViTEncoderBlock(num_msa_heads=num_msa_heads,
-                              embed_dim=embed_dim,
+            *[ViTEncoderBlock(embed_dim=embed_dim,
+                              num_msa_heads=num_msa_heads,
+                              attn_dropout=attn_dropout,
                               mlp_hidden_dim=mlp_hidden_dim,
-                              dropout=dropout) for _ in range(num_layers)]
+                              mlp_dropout=mlp_dropout) for _ in range(num_layers)]
         )
         
         # define the classifier
         self.classifier = nn.Sequential(
             nn.LayerNorm(normalized_shape=embed_dim),
+            nn.Dropout(p=classifier_dropout),
             nn.Linear(in_features=embed_dim,
                       out_features=num_classes,),
-            nn.Dropout(p=dropout),
         )
     
     def forward(self, x) -> torch.Tensor:
@@ -359,13 +386,13 @@ class ViT(nn.Module):
         x = torch.cat([class_token, x], dim=1)
 
         # add expanded position embeddings (both batch size and sequence length) to class and patch embeddings
-        x = x + self.position_embeddings.expand(x.shape[0], -1, -1)
+        x = x + self.position_embeddings # broadcasts position_embeddings along the batch dimension based on x input
 
         # apply num_layers ViT encoder blocks
         x = self.encoder_blocks(x)
 
-        # apply classifier to the class token's embeddings
-        return self.classifier(x[:, 0, :].squeeze())
+        # apply classifier to the class token's embeddings only (0th element of sequence dimension)
+        return self.classifier(x[:, 0, :].reshape(-1, x.shape[-1])) # can't use squeeze in case batch size is 1
 
 
 if __name__ == '__main__':
@@ -377,11 +404,14 @@ if __name__ == '__main__':
     patch_size = PATCH_SIZE
     embed_type = EMBED_TYPE
     embed_dim = EMBED_DIM
+    embed_dropout = EMBED_DROPOUT
     num_msa_heads = NUM_MSA_HEADS
-    dropout = DROPOUT
+    attn_dropout = ATTN_DROPOUT
     mlp_hidden_dim = MLP_HIDDEN_DIM
+    mlp_dropout = MLP_DROPOUT
     num_layers = NUM_LAYERS
     num_classes = NUM_CLASSES
+    classifier_dropout = CLASSIFIER_DROPOUT
 
     # create dummy image
     img = torch.ones([batch_size, in_channels, img_size, img_size])
@@ -390,16 +420,18 @@ if __name__ == '__main__':
     # create default embeddings
     patch_embed_default = PatchEmbedding(in_channels=in_channels,
                                          patch_size=patch_size,
-                                         embed_dim=embed_dim)
+                                         embed_dim=embed_dim,
+                                         embed_dropout=embed_dropout,)
     patch_embeddings_default = patch_embed_default(img)
     print(f"Default patch embeddings shape: {patch_embeddings_default.shape}")
     
     # create hybrid (CNN) embeddings
     patch_embed_CNN = PatchEmbeddingCNN(in_channels=in_channels,
                                         patch_size=patch_size,
-                                        embed_dim=embed_dim)
+                                        embed_dim=embed_dim,
+                                        embed_dropout=embed_dropout,)
     patch_embeddings_hybrid = patch_embed_default(img)
-    print(f"Hybrid patch embeddings shape: {patch_embeddings_default.shape}")
+    print(f"Hybrid patch embeddings shape: {patch_embeddings_hybrid.shape}")
 
     # set embeddings type for subsequent operations
     if embed_type == 'default':
@@ -419,23 +451,25 @@ if __name__ == '__main__':
     patch_embeddings = patch_embeddings + position_embeddings
 
     # apply multihead self attention to residual stream
-    msa = MSABlock(num_heads=num_msa_heads,
-                   embed_dim=embed_dim,)
+    msa = MSABlock(embed_dim=embed_dim,
+                   num_heads=num_msa_heads,
+                   attn_dropout=attn_dropout,)
     msa_out = msa(patch_embeddings)
     print(f"MSA output shape: {msa_out.shape}")
 
     # apply multi-layer perceptron to residual stream
     mlp = MLPBlock(embed_dim=embed_dim,
                    hidden_dim=mlp_hidden_dim,
-                   dropout=dropout,)
+                   mlp_dropout=mlp_dropout,)
     mlp_out = mlp(msa_out)
     print(f"MLP output shape: {mlp_out.shape}")
 
     # apply full ViT encoder block to residual stream
-    vit_encoder_block = ViTEncoderBlock(num_msa_heads=num_msa_heads,
-                                        embed_dim=embed_dim,
+    vit_encoder_block = ViTEncoderBlock(embed_dim=embed_dim,
+                                        num_msa_heads=num_msa_heads,
+                                        attn_dropout=attn_dropout,
                                         mlp_hidden_dim=mlp_hidden_dim,
-                                        dropout=dropout,)
+                                        mlp_dropout=mlp_dropout,)
     vit_encoder_block_out = vit_encoder_block(patch_embeddings)
     print(f"ViT encoder block output shape: {vit_encoder_block_out.shape}")
 
@@ -444,12 +478,15 @@ if __name__ == '__main__':
               in_channels=in_channels,
               patch_size=patch_size,
               embed_type=embed_type,
+              embed_dropout=embed_dropout,
               embed_dim=embed_dim,
               num_msa_heads=num_msa_heads,
+              attn_dropout=attn_dropout,
               mlp_hidden_dim=mlp_hidden_dim,
-              dropout=dropout,
+              mlp_dropout=mlp_dropout,
               num_layers=num_layers,
-              num_classes=num_classes,)
+              num_classes=num_classes,
+              classifier_dropout=classifier_dropout)
     logits = vit(img)
     print(50 * '-')
     print(f"ViT logits shape: {logits.shape}")
