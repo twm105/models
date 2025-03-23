@@ -177,9 +177,11 @@ class MSABlock(nn.Module):
 
         # apply layer norm followed by MSA
         x = self.ln(x)
-        return self.msa(query=x,
+        attn_output, _ = self.msa(query=x,
                         key=x,
-                        value=x,)
+                        value=x,
+                        need_weights=False)
+        return attn_output
 
 
 class MLPBlock(nn.Module):
@@ -258,7 +260,7 @@ class ViTEncoderBlock(nn.Module):
                                    embed_dim=self.embed_dim)
         
         # apply MSA block (note MSA optionally returns weights, so first element extracted) and add residual
-        x = self.msa_block(x)[0] + x
+        x = self.msa_block(x) + x
 
         # apply MLP block and add residual
         return self.mlp_block(x) + x
@@ -276,7 +278,7 @@ class ViT(nn.Module):
         Y: logits for classifier
     
     ARGS
-        img_size (Tuple): 2d size of the input images accepted by the ViT in pixels
+        img_shape (Tuple): 2d size of the input images accepted by the ViT in pixels
         in_channels (int): number of channels for input image
         patch_size (int): size of each patch applied to the input image
         embed_dim (int): size of the hidden dimension of the model's embeddings
@@ -419,7 +421,7 @@ if __name__ == '__main__':
     # apply multihead self attention to residual stream
     msa = MSABlock(num_heads=num_msa_heads,
                    embed_dim=embed_dim,)
-    msa_out, _ = msa(patch_embeddings)
+    msa_out = msa(patch_embeddings)
     print(f"MSA output shape: {msa_out.shape}")
 
     # apply multi-layer perceptron to residual stream
