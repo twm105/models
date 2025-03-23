@@ -77,21 +77,31 @@ class PatchEmbedding(nn.Module):
                  embed_dim:int=EMBED_DIM) -> nn.Module:
         super().__init__()
         
+        # set attributes
+        self.in_channels = in_channels
         self.patch_size = patch_size
-        self.input_reshape_dim2 = in_channels * patch_size**2
-        self.embedding_map = nn.Linear(in_features=self.input_reshape_dim2,
+        self.flattened_patch_dim = in_channels * patch_size**2
+
+        # define mapping module
+        self.embedding_map = nn.Linear(in_features=self.flattened_patch_dim,
                                        out_features=embed_dim,
                                        bias=False)
         
-    def forward(self, x) -> torch.Tensor:
+    def forward(self, input) -> torch.Tensor:
         # assertion that input image size is divisible by patch size and that x is 4d tensor
-        input_tensor_validation(input_tensor=x,
+        input_tensor_validation(input_tensor=input,
                                 patch_size=self.patch_size)
 
+        # get key dimensions from inputs
+        B, C, H, W = input.shape # extract dimensions from input
+        P = self.patch_size
+        N = int(H * W / P**2) # calculate sequence length (number of patches)
+
         # reshape input image and map to shape [batch_size x patch_sequence_length x embedding_dim]
-        self.N = int(img_size**2 / self.patch_size**2)
-        x = x.view(-1, self.N, self.input_reshape_dim2)
-        return self.embedding_map(x)
+        x = input.reshape(B, C, H // P, P, W // P, P) # prepare patch dimensions to avoid scrambling
+        x = x.permute(0, 2, 4, 3, 5, 1).contiguous() # ensures correct memory layout
+        x = x.view(B, N, self.flattened_patch_dim) # view applies correct shape
+        return self.embedding_map(x) # map flattened patches to embedding dimensions
 
 
 class PatchEmbeddingCNN(nn.Module):
@@ -393,7 +403,7 @@ if __name__ == '__main__':
     class_token = torch.randn((batch_size, 1, embed_dim))
     patch_embeddings = torch.cat([class_token, patch_embeddings], dim=1)
     position_embeddings = torch.randn(patch_embeddings.shape)
-    print(f"Patch embeddings shape: {patch_embeddings.shape}")
+    print(f"Class token and patch embeddings shape: {patch_embeddings.shape}")
     print(f"Position embeddings shape: {position_embeddings.shape}")
     patch_embeddings = patch_embeddings + position_embeddings
 
@@ -431,3 +441,4 @@ if __name__ == '__main__':
     logits = vit(img)
     print(50 * '-')
     print(f"ViT logits shape: {logits.shape}")
+    print(50 * '-')
