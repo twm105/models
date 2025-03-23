@@ -73,6 +73,7 @@ class PatchEmbedding(nn.Module):
         in_channels (int): number of channels for input image
         patch_size (int): size of each patch applied to the input image
         embed_dim (int): size of the hidden dimension of the model's embeddings
+        embed_dropout (float): probability of elements being zeroed during training
     """
 
     def __init__(self,
@@ -81,6 +82,8 @@ class PatchEmbedding(nn.Module):
                  embed_dim:int=EMBED_DIM,
                  embed_dropout:float=EMBED_DROPOUT,) -> nn.Module:
         super().__init__()
+
+        print(type(embed_dropout))
         
         # set attributes
         self.in_channels = in_channels
