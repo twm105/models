@@ -522,12 +522,12 @@ class ConViT(nn.Module):
 
         # define the type of embeddings
         if embed_type == 'default':
-            self.patch_embeddings = PatchEmbedding(in_channels=inv_conv_block_out_channels,
+            self.patch_embeddings = PatchEmbedding(in_channels=inv_conv_out_channels,
                                                    patch_size=patch_size,
                                                    embed_dim=embed_dim,
                                                    embed_dropout=embed_dropout,)
         elif embed_type == 'hybrid':
-            self.patch_embeddings = PatchEmbeddingCNN(in_channels=inv_conv_block_out_channels,
+            self.patch_embeddings = PatchEmbeddingCNN(in_channels=inv_conv_out_channels,
                                                       patch_size=patch_size,
                                                       embed_dim=embed_dim,
                                                       embed_dropout=embed_dropout,)
