@@ -509,6 +509,7 @@ class ConViT(nn.Module):
             # increase the channels if at the end of a group
             if inv_conv_group_count == conv_block_channel_groups:
                 inv_conv_out_channels *= conv_block_channel_factor
+                inv_conv_group_count = 0
             # add the layer
             inv_conv_blocks.append(InvConvBlock(in_channels=inv_conv_in_channels,
                                                 hidden_ratio=conv_block_hidden_ratio,
