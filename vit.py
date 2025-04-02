@@ -82,8 +82,6 @@ class PatchEmbedding(nn.Module):
                  embed_dim:int=EMBED_DIM,
                  embed_dropout:float=EMBED_DROPOUT,) -> nn.Module:
         super().__init__()
-
-        print(type(embed_dropout))
         
         # set attributes
         self.in_channels = in_channels
