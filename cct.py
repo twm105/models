@@ -141,9 +141,11 @@ class PatchEmbedding(nn.Module):
         x = x.view(B, N, self.flattened_patch_dim) # view applies correct shape
         return self.embedding_map(x) # map flattened patches to embedding dimensions
 
+
 # conv tokenizer (conv pool reshape)
 class Tokenizer(nn.Module):
     """docstring"""
+    # TODO tokenizer docstring
 
     def __init__(self,
                  out_channels:int,
@@ -156,7 +158,7 @@ class Tokenizer(nn.Module):
                  pooling_padding:int=POOLING_PADDING,) -> None:
         super().__init__()
 
-        # TODO input checks
+        # TODO tokenizer init input checks
 
         # define tokenizer layers
         self.tokenizer = nn.Sequential(
@@ -172,12 +174,14 @@ class Tokenizer(nn.Module):
         )
 
         def forward(self, x) -> torch.Tensor:
-            # TODO input checks
+            # TODO tokenizer fwd input checks
 
             # return applied tokenizer
             return self.tokenizer(x)
 
-# sin embeddings
+
+# TODO sine embeddings
+
 
 # vit msa block
 class MSABlock(nn.Module):
@@ -311,12 +315,13 @@ class ViTEncoderBlock(nn.Module):
 # sequence pooling
 class SequencePool(nn.Module):
     """docstring"""
+    # TODO sequence pool docstring
 
     def __init__(self,
                  embed_dim:int,) -> None:
         super().__init__()
 
-        # input checks
+        # TODO sequence pool init input checks
 
         # set attributes
         self.embed_dim = embed_dim
@@ -329,7 +334,7 @@ class SequencePool(nn.Module):
         # extract dims
         B, N, d = x.shape
        
-       # input checks
+       # TODO sequence pool fwd input checks
         assert_msg = f"[ERROR] Expected embed_dim={self.embed_dim}, x.shape[-1]={d}"
         assert d == self.embed_dim, assert_msg
 
@@ -344,10 +349,10 @@ class SequencePool(nn.Module):
         return x.view(B, d)
 
 
-# cct
+# TODO cct
 
 
-# cvt
+# TODO cvt
 
 
 if __name__ == "__main__":
