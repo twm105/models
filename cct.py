@@ -5,32 +5,44 @@ import torch.nn.functional as F
 from typing import Tuple
 
 
-# default config
+# default config (CCT-7/3x1, where 7 ViT layers, 3x3 Conv Kernel, 1 CNN layer)
 BATCH_SIZE = 32
 IN_CHANNELS = 3
-IMG_SIZE = 224
+IMG_SIZE = (32, 32)
 KERNEL_SIZE = 3
-STRIDE = 2
+STRIDE = 1
 PADDING = 1
 POOLING_KERNEL_SIZE = 3
-POOLING_STRIDE = 2
+POOLING_STRIDE = 1
 POOLING_PADDING = 1
 # CONV_BLOCK_DROPOUT = 0.
 PATCH_SIZE = 16
-EMBED_TYPE = 'sinusoidal' # None, learnable, sinusoidal
-EMBED_DIM = 768
-EMBED_DROPOUT = 0
-NUM_MSA_HEADS = 12
-ATTN_DROPOUT = 0
-MLP_HIDDEN_DIM = EMBED_DIM * 4
-MLP_DROPOUT = 0.1
+POS_EMBED_TYPE = 'sinusoidal' # None, learnable, sinusoidal
+EMBED_DIM = 256
+EMBED_DROPOUT = 0.
+NUM_MSA_HEADS = 4
+ATTN_DROPOUT = 0.1
+MLP_RATIO = 2
+MLP_HIDDEN_DIM = EMBED_DIM * MLP_RATIO
+MLP_DROPOUT = 0.
 NUM_CONV_LAYERS = 1
 NUM_VIT_LAYERS = 7
+STOCHASTIC_DEPTH = 0.1 # probability of a layer being removed during training (row-wise, not batch-wise)
 NUM_CLASSES = 10
 CLASSIFIER_DROPOUT = 0.1
 
 
 # util functions
+def conv2d_output_dim_size(H_in: int,
+                           kernel_size: int=3,
+                           padding: int=1,
+                           stride: int=1,
+                           dilation: int=1,) -> int:
+    """"""
+    # TODO conv2d_output_dim_size docstring
+    return (H_in + 2 * padding - dilation * (kernel_size - 1) - 1) // stride + 1
+
+
 def cnn_input_tensor_validation(input_tensor:torch.Tensor,
                                 in_channels:int) -> None:
     """Function that asserts correct dimensionality CNN input tensor, and that the channel count is correct.
@@ -148,8 +160,8 @@ class Tokenizer(nn.Module):
     # TODO tokenizer docstring
 
     def __init__(self,
-                 out_channels:int,
                  in_channels:int=IN_CHANNELS,
+                 out_channels:int=EMBED_DIM,
                  kernel_size:int=KERNEL_SIZE,
                  stride:int=STRIDE,
                  padding:int=PADDING,
@@ -173,14 +185,76 @@ class Tokenizer(nn.Module):
                          padding=pooling_padding,),
         )
 
-        def forward(self, x) -> torch.Tensor:
-            # TODO tokenizer fwd input checks
+    def forward(self, x) -> torch.Tensor:
+        # TODO tokenizer fwd input checks
 
-            # return applied tokenizer
-            return self.tokenizer(x)
+        # return applied tokenizer
+        return self.tokenizer(x)
 
 
-# TODO sine embeddings
+# sinusoidal position embeddings
+def sin_position_embedding(N: int,
+                           embed_dim: int,) -> torch.Tensor:
+    """Function to calculate position embeddings for transformer models.
+    
+    ARGS
+        N: sequence length for the model
+        embed_dim: model hidden dimension, d
+    """
+    # create postition and embed-term arrays (latter is 2i spaced)
+    position = torch.arange(N, dtype=torch.float32).unsqueeze(1) # [N, 1], to be broadcasted to [N, d/2]
+    div_term = torch.exp(torch.arange(0, embed_dim, 2) * (-torch.log(torch.tensor(10000.0)) / embed_dim)) # exp & log used to improve numerical stability in float32 computations
+
+    # initialise positional embeddings
+    pe = torch.zeros(N, embed_dim)
+
+    # interleave sin and cos embeddings along embed_dim
+    pe[:, 0::2] = torch.sin(position * div_term) # applied to even indices
+    pe[:, 1::2] = torch.cos(position * div_term) # applied to odd indices
+
+    # apply unitory batch-dim ready for model broadcasting
+    return pe.unsqueeze(dim=0)
+
+
+# mini-class module for sin position embeddings
+class SinPositionEmbeddings(nn.Module):
+    """Module for applying sinusoidal position embeddings to transformer base embeddings.
+    
+    ARGS
+        N: sequence length for the model
+        embed_dim: model hidden dimension, d
+    """
+    
+    def __init__(self,
+                 N: int,
+                 embed_dim: int,) -> None:
+        super().__init__()
+
+        pe = sin_position_embedding(N=N, embed_dim=embed_dim)
+        self.register_buffer('pe', pe) # keeps the parameters non-trainable
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # input validation
+        assert x.size(-1) == self.pe.size(-1), f"Embedding dim mismatch: x has {x.size(-1)}, expected {self.pe.size(-1)}"
+
+        # apply embeddings to input
+        return x + self.pe[:, :x.size(1)] # clips N in the case of shortened sequence and broadcasts along batch dim.
+    
+
+# learnable positional embeddings
+class LearnablePositionEmbeddings(nn.Module):
+    """"""
+    # TODO docstring for PositionalEmbeddings
+
+    def __init__(self,
+                 N: int,
+                 embed_dim: int=EMBED_DIM,) -> None:
+        super().__init__()
+
+        self.position_embedding = nn.Parameter(data=torch.randn(1, N, embed_dim))
+    
+    def forward(self, x) -> torch.tensor:
+        return x + self.position_embedding # broadcasts unitary dim0 along batch dim
 
 
 # vit msa block
@@ -350,7 +424,106 @@ class SequencePool(nn.Module):
 
 
 # TODO cct
+class CCT(nn.Module):
+    """"""
+    # TODO CCT docstring
 
+    def __init__(self,
+                 img_shape:Tuple[int, int]=IMG_SIZE,
+                 in_channels:int=IN_CHANNELS,
+                 kernel_size:int=KERNEL_SIZE,
+                 stride:int=STRIDE,
+                 padding:int=PADDING,
+                 pool_kernel:int=POOLING_KERNEL_SIZE,
+                 pool_stride:int=POOLING_STRIDE,
+                 pool_padding:int=POOLING_PADDING,
+                 embed_dim:int=EMBED_DIM,
+                 embed_dropout:float=EMBED_DROPOUT, # TODO embed dropout needed?
+                 pos_embed_type:str=POS_EMBED_TYPE,
+                 num_msa_heads:int=NUM_MSA_HEADS,
+                 attn_dropout:float=ATTN_DROPOUT,
+                 mlp_hidden_dim:int=MLP_HIDDEN_DIM,
+                 mlp_dropout:float=MLP_DROPOUT,
+                 num_cnn_layers:int=NUM_CONV_LAYERS,
+                 num_vit_layers:int=NUM_VIT_LAYERS,
+                 stochastic_depth:float=STOCHASTIC_DEPTH,
+                 num_classes:int=NUM_CLASSES,
+                 classifier_dropout:float=CLASSIFIER_DROPOUT) -> None:
+        super().__init__()
+        # TODO CCT input checks
+        # scalar kernel, stride, padding inputs
+
+        # initialise conv tokenizer layers
+        self.conv_layers = nn.Sequential(
+            *[Tokenizer(in_channels=in_channels,
+                        out_channels=embed_dim,
+                        kernel_size=kernel_size,
+                        stride=stride,
+                        padding=padding,
+                        pooling_kernel=pool_kernel,
+                        pooling_stride=pool_stride,
+                        pooling_padding=pool_padding,) for _ in range(num_cnn_layers)],
+            nn.Flatten(start_dim=2,
+                       end_dim=-1,),
+            nn.Dropout(p=embed_dropout,)
+        )
+
+        # set sequence length using fwd pass of conv_layers on non-trainable tensor of same size as input img
+        dummy_input_shape = [1, 3]
+        dummy_input_shape.extend(list(img_shape))
+        dummy_input = torch.randn(dummy_input_shape, requires_grad=False,)
+        tokenizer_out = self.conv_layers(dummy_input)
+        self.N = tokenizer_out.shape[-1] # tokenizer final dim (flattended conv2d) is sequence length
+        self.embed_dim = embed_dim
+
+        # apply positional embeddings
+        embed_types = ['none', 'learnable', 'sinusoidal']
+        assert pos_embed_type in embed_types, f"[ERROR] Positional embedding type '{pos_embed_type}' not in [{', '.join(embed_types)}]."
+        if pos_embed_type == 'sinusoidal':
+            self.position_embedding = SinPositionEmbeddings(self.N, embed_dim=embed_dim)
+        elif pos_embed_type == 'learnable':
+            self.position_embedding = LearnablePositionEmbeddings(self.N, embed_dim=embed_dim)
+        elif pos_embed_type == 'none':
+            pass
+
+        # initialise ViT block layers
+        self.encoder_blocks = nn.Sequential(
+            *[ViTEncoderBlock(embed_dim=embed_dim,
+                              num_msa_heads=num_msa_heads,
+                              attn_dropout=attn_dropout,
+                              mlp_hidden_dim=mlp_hidden_dim,
+                              mlp_dropout=mlp_dropout) for _ in range(num_vit_layers)]
+        )
+
+        # initialise sequence pooling
+        self.sequence_pooling = SequencePool(embed_dim=embed_dim)
+
+        # initialise classifier
+        self.classifier = nn.Sequential(
+            nn.LayerNorm(normalized_shape=embed_dim),
+            nn.Dropout(p=classifier_dropout),
+            nn.Linear(in_features=embed_dim,
+                      out_features=num_classes,),
+        )
+
+    def forward(self, x) -> torch.tensor:
+        # TODO CCT forward input checks
+        # TODO nest all layers for minimum memory ops on GPU
+
+        # tokenizer
+        x = self.conv_layers(x).permute(0, 2, 1)
+
+        # positional embeddings (includes broadcast of positional embeddings along batch dim)
+        x = self.position_embedding(x)
+
+        # ViT layers (incl. stochastic depth)
+        x = self.encoder_blocks(x)
+
+        # sequence pooling
+        x = self.sequence_pooling(x)
+
+        # classifier
+        return self.classifier(x)
 
 # TODO cvt
 
@@ -363,3 +536,9 @@ if __name__ == "__main__":
     sequence_pool = SequencePool(embed_dim=16)
     z = sequence_pool(xL)
     print(f"z shape: {z.shape}")
+
+    # apply CCT
+    img = torch.randn(8, 3, 32, 32)
+    cct = CCT() # default CCT-7/3x1
+    y = cct(img)
+    print(f"CCT output shape: {y.shape}")
