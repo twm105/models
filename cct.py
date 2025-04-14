@@ -33,16 +33,6 @@ CLASSIFIER_DROPOUT = 0.1
 
 
 # util functions
-def conv2d_output_dim_size(H_in: int,
-                           kernel_size: int=3,
-                           padding: int=1,
-                           stride: int=1,
-                           dilation: int=1,) -> int:
-    """"""
-    # TODO conv2d_output_dim_size docstring
-    return (H_in + 2 * padding - dilation * (kernel_size - 1) - 1) // stride + 1
-
-
 def cnn_input_tensor_validation(input_tensor:torch.Tensor,
                                 in_channels:int) -> None:
     """Function that asserts correct dimensionality CNN input tensor, and that the channel count is correct.
@@ -423,7 +413,7 @@ class SequencePool(nn.Module):
         return x.view(B, d)
 
 
-# TODO cct
+# cct
 class CCT(nn.Module):
     """"""
     # TODO CCT docstring
@@ -446,7 +436,7 @@ class CCT(nn.Module):
                  mlp_dropout:float=MLP_DROPOUT,
                  num_cnn_layers:int=NUM_CONV_LAYERS,
                  num_vit_layers:int=NUM_VIT_LAYERS,
-                 stochastic_depth:float=STOCHASTIC_DEPTH,
+                 stochastic_depth:float=STOCHASTIC_DEPTH, # TODO CCT stochastic depth
                  num_classes:int=NUM_CLASSES,
                  classifier_dropout:float=CLASSIFIER_DROPOUT) -> None:
         super().__init__()
