@@ -2,6 +2,7 @@
 import torch
 from torch import nn
 import torch.nn.functional as F
+from torchvision.ops import stochastic_depth
 from typing import Tuple
 
 
@@ -27,7 +28,7 @@ MLP_HIDDEN_DIM = EMBED_DIM * MLP_RATIO
 MLP_DROPOUT = 0.
 NUM_CONV_LAYERS = 1
 NUM_VIT_LAYERS = 7
-STOCHASTIC_DEPTH = 0.1 # probability of a layer being removed during training (row-wise, not batch-wise)
+P_STOCHASTIC_DEPTH = 0.1 # probability of a layer being removed during training (row-wise, not batch-wise)
 NUM_CLASSES = 10
 CLASSIFIER_DROPOUT = 0.1
 
@@ -352,11 +353,15 @@ class ViTEncoderBlock(nn.Module):
                  num_msa_heads:int=NUM_MSA_HEADS,
                  attn_dropout:float=ATTN_DROPOUT,
                  mlp_hidden_dim=MLP_HIDDEN_DIM,
-                 mlp_dropout:float=MLP_DROPOUT,) -> None:
+                 mlp_dropout:float=MLP_DROPOUT,
+                 p_stochastic_depth:float=0.0) -> None:
         super().__init__()
 
+        # set attributes
         self.embed_dim = embed_dim
+        self.p_stochastic_depth = p_stochastic_depth
 
+        # initialise layers for block
         self.msa_block = MSABlock(embed_dim=embed_dim,
                                   num_heads=num_msa_heads,
                                   attn_dropout=attn_dropout,)
@@ -370,10 +375,16 @@ class ViTEncoderBlock(nn.Module):
                                    embed_dim=self.embed_dim)
         
         # apply MSA block (note MSA optionally returns weights, so first element extracted) and add residual
-        x = self.msa_block(x) + x
+        x = stochastic_depth(input=self.msa_block(x),
+                             p=self.p_stochastic_depth,
+                             mode='row',
+                             training=self.training,) + x
 
         # apply MLP block and add residual
-        return self.mlp_block(x) + x
+        return stochastic_depth(input=self.mlp_block(x),
+                                p=self.p_stochastic_depth,
+                                mode='row',
+                                training=self.training,) + x
 
 
 # sequence pooling
@@ -436,7 +447,7 @@ class CCT(nn.Module):
                  mlp_dropout:float=MLP_DROPOUT,
                  num_cnn_layers:int=NUM_CONV_LAYERS,
                  num_vit_layers:int=NUM_VIT_LAYERS,
-                 stochastic_depth:float=STOCHASTIC_DEPTH, # TODO CCT stochastic depth
+                 p_stochastic_depth:float=P_STOCHASTIC_DEPTH, # TODO CCT stochastic depth
                  num_classes:int=NUM_CLASSES,
                  classifier_dropout:float=CLASSIFIER_DROPOUT) -> None:
         super().__init__()
@@ -476,13 +487,17 @@ class CCT(nn.Module):
         elif pos_embed_type == 'none':
             pass
 
+        # calculate stochastic depth probs per layer
+        stochastic_depth_probs = list(torch.linspace(0.0, p_stochastic_depth, num_vit_layers))
+
         # initialise ViT block layers
         self.encoder_blocks = nn.Sequential(
             *[ViTEncoderBlock(embed_dim=embed_dim,
                               num_msa_heads=num_msa_heads,
                               attn_dropout=attn_dropout,
                               mlp_hidden_dim=mlp_hidden_dim,
-                              mlp_dropout=mlp_dropout) for _ in range(num_vit_layers)]
+                              mlp_dropout=mlp_dropout,
+                              p_stochastic_depth=stochastic_depth_probs[i],) for i in range(num_vit_layers)]
         )
 
         # initialise sequence pooling
@@ -528,7 +543,10 @@ if __name__ == "__main__":
     print(f"z shape: {z.shape}")
 
     # apply CCT
-    img = torch.randn(8, 3, 32, 32)
+    img = torch.randn(4, 3, 32, 32)
     cct = CCT() # default CCT-7/3x1
     y = cct(img)
     print(f"CCT output shape: {y.shape}")
+
+    # check stochastic depth probs
+    [print(f"layer: {i}, p_stochastic_depth: {block.p_stochastic_depth:.4f}") for i, block in enumerate(cct.encoder_blocks)]
