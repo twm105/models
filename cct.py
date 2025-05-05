@@ -10,11 +10,12 @@ from typing import Tuple
 BATCH_SIZE = 32
 IN_CHANNELS = 3
 IMG_SIZE = (32, 32)
+CONV_INTERMEDIATE_CHANNELS = 64
 KERNEL_SIZE = 3
 STRIDE = 1
 PADDING = 1
-POOLING_KERNEL_SIZE = 2
-POOLING_STRIDE = 1
+POOLING_KERNEL_SIZE = 3
+POOLING_STRIDE = 2
 POOLING_PADDING = 1
 # CONV_BLOCK_DROPOUT = 0.
 PATCH_SIZE = 16
@@ -165,6 +166,7 @@ class Tokenizer(nn.Module):
     def __init__(
         self,
         in_channels: int = IN_CHANNELS,
+        intermediate_channels: int = CONV_INTERMEDIATE_CHANNELS,
         out_channels: int = EMBED_DIM,
         kernel_size: int = KERNEL_SIZE,
         stride: int = STRIDE,
@@ -172,26 +174,39 @@ class Tokenizer(nn.Module):
         pooling_kernel: int = POOLING_KERNEL_SIZE,
         pooling_stride: int = POOLING_STRIDE,
         pooling_padding: int = POOLING_PADDING,
+        num_cnn_layers: int = NUM_CONV_LAYERS,
     ) -> None:
         super().__init__()
 
         # TODO tokenizer init input checks
 
+        # calculate in/out channels per layer
+        in_out_channels = (
+            [in_channels]
+            + [intermediate_channels for _ in range(num_cnn_layers - 1)]
+            + [out_channels]
+        )
+
         # define tokenizer layers
         self.tokenizer = nn.Sequential(
-            nn.Conv2d(
-                in_channels=in_channels,
-                out_channels=out_channels,
-                kernel_size=kernel_size,
-                stride=stride,
-                padding=padding,
-            ),
-            nn.ReLU(),
-            nn.MaxPool2d(
-                kernel_size=pooling_kernel,
-                stride=pooling_stride,
-                padding=pooling_padding,
-            ),
+            *[
+                nn.Sequential(
+                    nn.Conv2d(
+                        in_channels=in_out_channels[i],
+                        out_channels=in_out_channels[i + 1],
+                        kernel_size=kernel_size,
+                        stride=stride,
+                        padding=padding,
+                    ),
+                    nn.ReLU(),
+                    nn.MaxPool2d(
+                        kernel_size=pooling_kernel,
+                        stride=pooling_stride,
+                        padding=pooling_padding,
+                    ),
+                )
+                for i in range(num_cnn_layers)
+            ]
         )
 
     def forward(self, x) -> torch.Tensor:
@@ -487,6 +502,7 @@ class CCT(nn.Module):
         self,
         img_shape: Tuple[int, int] = IMG_SIZE,
         in_channels: int = IN_CHANNELS,
+        intermediate_channels: int = CONV_INTERMEDIATE_CHANNELS,
         kernel_size: int = KERNEL_SIZE,
         stride: int = STRIDE,
         padding: int = PADDING,
@@ -512,19 +528,18 @@ class CCT(nn.Module):
 
         # initialise conv tokenizer layers
         self.conv_layers = nn.Sequential(
-            *[
-                Tokenizer(
-                    in_channels=in_channels if i == 0 else embed_dim,
-                    out_channels=embed_dim,
-                    kernel_size=kernel_size,
-                    stride=stride,
-                    padding=padding,
-                    pooling_kernel=pool_kernel,
-                    pooling_stride=pool_stride,
-                    pooling_padding=pool_padding,
-                )
-                for i in range(num_cnn_layers)
-            ],
+            Tokenizer(
+                in_channels=in_channels,
+                intermediate_channels=intermediate_channels,
+                out_channels=embed_dim,
+                kernel_size=kernel_size,
+                stride=stride,
+                padding=padding,
+                pooling_kernel=pool_kernel,
+                pooling_stride=pool_stride,
+                pooling_padding=pool_padding,
+                num_cnn_layers=num_cnn_layers,
+            ),
             nn.Flatten(
                 start_dim=2,
                 end_dim=-1,
